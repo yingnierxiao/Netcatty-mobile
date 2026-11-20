@@ -1,4 +1,7 @@
 import 'dart:io';
+
+import 'package:dartssh2/dartssh2.dart' show SftpStatusError;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../infrastructure/ssh/remote_archive.dart';
 import '../../infrastructure/ssh/file_selection.dart';
 import '../../infrastructure/ssh/zip_selection.dart';
@@ -16,6 +19,7 @@ import '../../application/home_navigation.dart';
 import '../../application/settings_controller.dart';
 import '../../infrastructure/ssh/android_document_tree_service.dart';
 import '../../infrastructure/ssh/sftp_service.dart';
+import '../../infrastructure/storage/sftp_browse_state.dart';
 import '../widgets/custom_background.dart';
 import '../widgets/sftp_editor.dart';
 import '../widgets/sftp_permissions_dialog.dart';
@@ -34,6 +38,8 @@ class SftpScreen extends ConsumerStatefulWidget {
 class _SftpScreenState extends ConsumerState<SftpScreen> {
   late final Future<MountableFileTransferService> _localService;
   final _remoteServices = <String, SftpService>{};
+  late final SftpBrowseState _browseState;
+  bool _autoSelectedLocal = false;
   var _leftKey = GlobalKey<_SftpPaneState>();
   var _rightKey = GlobalKey<_SftpPaneState>();
   String? _leftSourceId;
@@ -54,7 +60,18 @@ class _SftpScreenState extends ConsumerState<SftpScreen> {
   @override
   void initState() {
     super.initState();
-    _localService = widget.localService ??
+    _localService = _initializeSources();
+  }
+
+  Future<MountableFileTransferService> _initializeSources() async {
+    SharedPreferences? preferences;
+    try {
+      preferences = await SharedPreferences.getInstance();
+    } catch (_) {
+      // Local preferences are optional for browsing.
+    }
+    _browseState = SftpBrowseState(preferences);
+    return widget.localService ??
         (Platform.isAndroid
             ? AndroidDocumentTreeTransferService.create()
             : LocalFileTransferService.create());
@@ -70,6 +87,8 @@ class _SftpScreenState extends ConsumerState<SftpScreen> {
         .where((session) => session.isSsh && session.connected)
         .toList(growable: false);
     final navigationRequest = ref.watch(sftpNavigationRequestProvider);
+    final connectedIds = sessions.map((session) => session.id).toSet();
+    _remoteServices.removeWhere((id, _) => !connectedIds.contains(id));
     for (final session in sessions) {
       final existing = _remoteServices[session.id];
       if (existing == null || !identical(existing.session, session)) {
@@ -94,7 +113,11 @@ class _SftpScreenState extends ConsumerState<SftpScreen> {
             active != null && sourceIds.contains('ssh:${active.id}')
                 ? 'ssh:${active.id}'
                 : sources.first.id;
-        if (!sourceIds.contains(_leftSourceId)) _leftSourceId = preferred;
+        if (!sourceIds.contains(_leftSourceId) ||
+            (_autoSelectedLocal && preferred != 'local')) {
+          _leftSourceId = preferred;
+          _autoSelectedLocal = preferred == 'local';
+        }
         if (!sourceIds.contains(_rightSourceId)) _rightSourceId = 'local';
         _scheduleNavigation(navigationRequest, sourceIds);
         final left = sources.firstWhere((source) => source.id == _leftSourceId);
@@ -173,6 +196,7 @@ class _SftpScreenState extends ConsumerState<SftpScreen> {
                           key: _leftKey,
                           label: _dualPane ? '左侧' : '当前',
                           service: left,
+                          browseState: _browseState,
                           sources: sources,
                           clipboard: _clipboard,
                           sharedTransferBusy: _transfer != null,
@@ -202,6 +226,7 @@ class _SftpScreenState extends ConsumerState<SftpScreen> {
                             key: _rightKey,
                             label: '右侧',
                             service: right,
+                            browseState: _browseState,
                             sources: sources,
                             clipboard: _clipboard,
                             sharedTransferBusy: _transfer != null,
@@ -245,6 +270,7 @@ class _SftpScreenState extends ConsumerState<SftpScreen> {
     }
     if (_leftSourceId != sourceId) {
       _leftSourceId = sourceId;
+      _autoSelectedLocal = false;
       _leftKey = GlobalKey<_SftpPaneState>();
     }
     _scheduledNavigation = request;
@@ -268,6 +294,7 @@ class _SftpScreenState extends ConsumerState<SftpScreen> {
     setState(() {
       if (left) {
         _leftSourceId = id;
+        _autoSelectedLocal = false;
         _leftKey = GlobalKey<_SftpPaneState>();
       } else {
         _rightSourceId = id;

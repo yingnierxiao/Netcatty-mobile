@@ -5,6 +5,7 @@ class _SftpPane extends StatefulWidget {
     super.key,
     required this.label,
     required this.service,
+    required this.browseState,
     required this.sources,
     required this.onSourceChanged,
     required this.onPhoneMountChanged,
@@ -17,6 +18,7 @@ class _SftpPane extends StatefulWidget {
 
   final String label;
   final FileTransferService service;
+  final SftpBrowseState browseState;
   final List<FileTransferService> sources;
   final ValueChanged<String> onSourceChanged;
   final VoidCallback onPhoneMountChanged;
@@ -32,7 +34,9 @@ class _SftpPane extends StatefulWidget {
 }
 
 class _SftpPaneState extends State<_SftpPane> {
-  late String path = widget.service.rootPath;
+  late String path;
+  bool _restoring = false;
+  bool _showingCachedEntries = false;
   var _loading = false;
   var _listGeneration = 0;
   Object? _error;
@@ -52,7 +56,23 @@ class _SftpPaneState extends State<_SftpPane> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => refresh());
+    _restoreSource();
+  }
+
+  void _restoreSource() {
+    final source = service;
+    final saved = widget.browseState.lastPath(source);
+    path = saved ?? source.rootPath;
+    _restoring = saved != null && saved != source.rootPath;
+    _entries = widget.browseState.cachedEntries(source, path) ?? const [];
+    _showingCachedEntries = _entries.isNotEmpty;
+    _error = null;
+    _highlightedEntryPath = null;
+    _loading = true;
+    final generation = ++_listGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && generation == _listGeneration) refresh();
+    });
   }
 
   @override
@@ -61,9 +81,7 @@ class _SftpPaneState extends State<_SftpPane> {
     if (!identical(oldWidget.service, widget.service)) {
       _selected.clear();
       _selecting = false;
-      path = widget.service.rootPath;
-      _entries = const [];
-      WidgetsBinding.instance.addPostFrameCallback((_) => refresh());
+      _restoreSource();
     }
   }
 
@@ -374,13 +392,19 @@ class _SftpPaneState extends State<_SftpPane> {
         subtitle: compact
             ? null
             : LText(entry.isDirectory ? '目录' : _formatBytes(entry.size)),
-        onLongPress: () => _toggleEntry(entry),
-        onTap: () => _selecting
-            ? _toggleEntry(entry)
-            : entry.isDirectory
-                ? _open(entry.path)
-                : _edit(entry),
+        onLongPress: _showingCachedEntries ? null : () => _toggleEntry(entry),
+        onTap: () {
+          if (_showingCachedEntries && !entry.isDirectory) return;
+          if (_selecting) {
+            _toggleEntry(entry);
+          } else if (entry.isDirectory) {
+            _open(entry.path);
+          } else {
+            _edit(entry);
+          }
+        },
         trailing: PopupMenuButton<String>(
+          enabled: !_showingCachedEntries,
           tooltip: localized('文件操作'),
           padding: EdgeInsets.zero,
           onSelected: (value) => _entryAction(value, entry),
@@ -466,6 +490,8 @@ class _SftpPaneState extends State<_SftpPane> {
     final generation = ++_listGeneration;
     final source = service;
     final directory = path;
+    final restoring = _restoring;
+    _restoring = false;
     bool current() =>
         mounted &&
         generation == _listGeneration &&
@@ -480,11 +506,28 @@ class _SftpPaneState extends State<_SftpPane> {
       if (current()) {
         setState(() {
           _entries = entries;
+          _showingCachedEntries = false;
           _selected.removeWhere((p) => !entries.any((e) => e.path == p));
         });
+        await widget.browseState.remember(source, directory, entries);
       }
     } catch (error) {
-      if (current()) setState(() => _error = error);
+      if (!current()) return;
+      widget.browseState.invalidate(source, directory);
+      _showingCachedEntries = false;
+      if (restoring && error is SftpStatusError) {
+        setState(() {
+          path = source.rootPath;
+          _entries = const [];
+        });
+        await refresh();
+      } else {
+        setState(() {
+          _entries = const [];
+          _selected.clear();
+          _error = error;
+        });
+      }
     } finally {
       if (current()) setState(() => _loading = false);
     }
@@ -524,7 +567,9 @@ class _SftpPaneState extends State<_SftpPane> {
       _selected.clear();
       _selecting = false;
       path = value;
-      _entries = const [];
+      _restoring = false;
+      _entries = widget.browseState.cachedEntries(service, path) ?? const [];
+      _showingCachedEntries = _entries.isNotEmpty;
       _highlightedEntryPath = null;
     });
     refresh();
@@ -536,7 +581,9 @@ class _SftpPaneState extends State<_SftpPane> {
       _selected.clear();
       _selecting = false;
       path = service.parentPath(filePath);
-      _entries = const [];
+      _restoring = false;
+      _entries = widget.browseState.cachedEntries(service, path) ?? const [];
+      _showingCachedEntries = _entries.isNotEmpty;
       _error = null;
       _highlightedEntryPath = filePath;
     });
