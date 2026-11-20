@@ -164,12 +164,14 @@ class _TerminalPane extends StatefulWidget {
     super.key,
     required this.session,
     required this.fontSize,
+    required this.onFontSizeChanged,
     required this.secureKeyboard,
     required this.pictureInPicture,
     required this.transparentBackground,
   });
   final ActiveTerminalSession session;
   final double fontSize;
+  final ValueChanged<double> onFontSizeChanged;
   final bool secureKeyboard;
   final bool pictureInPicture;
   final bool transparentBackground;
@@ -185,6 +187,7 @@ class _TerminalPaneState extends State<_TerminalPane> {
   var _terminalViewKey = GlobalKey<TerminalViewState>();
   final _terminalStackKey = GlobalKey();
   final _scrollController = ScrollController();
+  final _pinchZoom = TerminalPinchZoom();
   Offset? _dragPointerToAnchor;
   Timer? _pictureInPictureUpdateTimer;
   Timer? _copyHoldTimer;
@@ -211,6 +214,7 @@ class _TerminalPaneState extends State<_TerminalPane> {
       _terminalViewKey = GlobalKey<TerminalViewState>();
     }
     if (oldWidget.session.terminal != widget.session.terminal) {
+      _pinchZoom.reset();
       oldWidget.session.terminal.removeListener(_onTerminalChanged);
       widget.session.terminal.addListener(_onTerminalChanged);
     }
@@ -371,6 +375,14 @@ class _TerminalPaneState extends State<_TerminalPane> {
             }));
           }
           _copyHoldTimer?.cancel();
+          if (event.kind == PointerDeviceKind.touch) {
+            _pinchZoom.pointerDown(
+                event.pointer, event.position, widget.fontSize);
+            if (_pinchZoom.hasMultipleTouches) {
+              _copyHoldOrigin = null;
+              return;
+            }
+          }
           if (_alternateScreen &&
               !widget.pictureInPicture &&
               event.kind == PointerDeviceKind.touch) {
@@ -381,14 +393,27 @@ class _TerminalPaneState extends State<_TerminalPane> {
           }
         },
         onPointerMove: (event) {
+          if (event.kind == PointerDeviceKind.touch) {
+            final size = _pinchZoom.pointerMove(event.pointer, event.position);
+            if (size != null) {
+              _controller.clearSelection();
+              widget.onFontSizeChanged(size);
+            }
+          }
           if (_copyHoldOrigin != null &&
               (event.position - _copyHoldOrigin!).distance > kTouchSlop) {
             _copyHoldTimer?.cancel();
             _copyHoldOrigin = null;
           }
         },
-        onPointerUp: (_) => _copyHoldTimer?.cancel(),
-        onPointerCancel: (_) => _copyHoldTimer?.cancel(),
+        onPointerUp: (event) {
+          _pinchZoom.pointerEnd(event.pointer);
+          _copyHoldTimer?.cancel();
+        },
+        onPointerCancel: (event) {
+          _pinchZoom.pointerEnd(event.pointer);
+          _copyHoldTimer?.cancel();
+        },
         child: RepaintBoundary(
           child: TerminalView(
             widget.session.terminal,

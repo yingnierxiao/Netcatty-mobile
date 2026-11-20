@@ -24,6 +24,7 @@ import '../widgets/host_system_icon.dart';
 import '../widgets/port_forward_sheet.dart';
 import '../widgets/server_monitor_sheet.dart';
 import '../widgets/terminal_special_keys.dart';
+import '../widgets/terminal_pinch_zoom.dart';
 import '../widgets/system_management/system_management_sheet.dart';
 
 part 'terminal_screen_pane.dart';
@@ -40,6 +41,12 @@ class TerminalScreen extends ConsumerStatefulWidget {
 
 class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   var _split = false;
+  final _sessionFontSizes = <String, double>{};
+
+  void _changeFontSize(String sessionId, double size) {
+    if (_sessionFontSizes[sessionId] == size) return;
+    setState(() => _sessionFontSizes[sessionId] = size);
+  }
   StreamSubscription<bool>? _pictureInPictureSubscription;
 
   @override
@@ -62,6 +69,8 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(sessionControllerProvider);
     final settings = ref.watch(settingsControllerProvider);
+    final sessionIds = state.sessions.map((session) => session.id).toSet();
+    _sessionFontSizes.removeWhere((id, _) => !sessionIds.contains(id));
     final snippets =
         ref.watch(vaultControllerProvider).data?.snippets ?? const [];
     final selectedPending = state.selectedPending;
@@ -85,6 +94,16 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       ...state.sessions.map((value) => value.host),
       ...state.pendingConnections.map((value) => value.host),
     ];
+    Widget terminalPane(ActiveTerminalSession session, {required bool pip}) =>
+        _TerminalPane(
+          key: ValueKey(session.id),
+          session: session,
+          fontSize: _sessionFontSizes[session.id] ?? settings.terminalFontSize,
+          onFontSizeChanged: (size) => _changeFontSize(session.id, size),
+          secureKeyboard: settings.terminalSecureKeyboard,
+          pictureInPicture: pip,
+          transparentBackground: customBackground && !pip,
+        );
     return SafeArea(
       child: Stack(
         children: [
@@ -267,43 +286,20 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                                 if (pictureInPicture ||
                                     !_split ||
                                     state.sessions.length < 2) {
-                                  return _TerminalPane(
-                                    key: ValueKey(state.active!.id),
-                                    session: state.active!,
-                                    fontSize: settings.terminalFontSize,
-                                    secureKeyboard:
-                                        settings.terminalSecureKeyboard,
-                                    pictureInPicture: pictureInPicture,
-                                    transparentBackground:
-                                        customBackground && !pictureInPicture,
-                                  );
+                                  return terminalPane(state.active!,
+                                      pip: pictureInPicture);
                                 }
                                 final secondIndex = (state.activeIndex + 1) %
                                     state.sessions.length;
                                 final children = [
                                   Expanded(
-                                    child: _TerminalPane(
-                                      key: ValueKey(state.active!.id),
-                                      session: state.active!,
-                                      fontSize: settings.terminalFontSize,
-                                      secureKeyboard:
-                                          settings.terminalSecureKeyboard,
-                                      pictureInPicture: false,
-                                      transparentBackground: customBackground,
-                                    ),
+                                    child: terminalPane(state.active!,
+                                        pip: false),
                                   ),
                                   const Divider(height: 1, thickness: 1),
                                   Expanded(
-                                    child: _TerminalPane(
-                                      key: ValueKey(
-                                          state.sessions[secondIndex].id),
-                                      session: state.sessions[secondIndex],
-                                      fontSize: settings.terminalFontSize,
-                                      secureKeyboard:
-                                          settings.terminalSecureKeyboard,
-                                      pictureInPicture: false,
-                                      transparentBackground: customBackground,
-                                    ),
+                                    child: terminalPane(
+                                        state.sessions[secondIndex], pip: false),
                                   ),
                                 ];
                                 return constraints.maxWidth >
