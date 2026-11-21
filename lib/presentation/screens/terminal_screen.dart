@@ -47,6 +47,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     if (_sessionFontSizes[sessionId] == size) return;
     setState(() => _sessionFontSizes[sessionId] = size);
   }
+
   StreamSubscription<bool>? _pictureInPictureSubscription;
 
   @override
